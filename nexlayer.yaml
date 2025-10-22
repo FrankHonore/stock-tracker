@@ -40,3 +40,15 @@ application:
         - name: postgres-data
           size: 2Gi
           mountPath: /var/lib/postgresql
+
+    # Database Migration - Runs schema initialization
+    - name: migrate
+      image: registry.nexlayer.io/nexlayer-mcp/1aca0497-32cf-4760-b771-d5099f049888/stock-tracker-dd3a397d-migrate:ffe59e9e-1761093457
+      servicePorts:
+        - 5000
+      vars:
+        DB_HOST: database.pod
+        DB_PORT: "5432"
+        DB_NAME: stock_tracker
+        DB_USER: postgres
+        DB_PASSWORD: nexlayer_postgres_2024
