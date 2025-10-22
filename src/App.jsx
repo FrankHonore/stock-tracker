@@ -117,26 +117,21 @@ export default function StockTracker() {
 
         // If historical mode, filter to selected date and first hour of trading
         if (dateForHistorical) {
-          const targetDate = new Date(dateForHistorical);
-          const targetDateStr = targetDate.toISOString().split('T')[0];
+          // Alpha Vantage timestamps are in format "2024-01-15 09:30:00"
+          // Extract just the date part for comparison
+          const targetDateStr = dateForHistorical; // Already in YYYY-MM-DD format
 
           filteredEntries = filteredEntries.filter(([timestamp]) => {
-            const date = new Date(timestamp);
-            const dateStr = date.toISOString().split('T')[0];
+            // Extract date from timestamp (format: "2024-01-15 09:30:00")
+            const timestampDateStr = timestamp.split(' ')[0];
 
             // Check if it's the target date
-            if (dateStr !== targetDateStr) return false;
+            if (timestampDateStr !== targetDateStr) return false;
 
             // Filter for first hour of trading (9:30 AM - 10:30 AM ET)
-            // Convert to ET time
-            const etTimeStr = date.toLocaleString('en-US', {
-              timeZone: 'America/New_York',
-              hour12: false,
-              hour: '2-digit',
-              minute: '2-digit'
-            });
-
-            const [hour, minute] = etTimeStr.split(':').map(Number);
+            // Extract time from timestamp
+            const timePart = timestamp.split(' ')[1]; // "09:30:00"
+            const [hour, minute] = timePart.split(':').map(Number);
             const timeInMinutes = hour * 60 + minute;
             const marketOpen = 9 * 60 + 30;  // 9:30 AM
             const firstHourEnd = 10 * 60 + 30;  // 10:30 AM
