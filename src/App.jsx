@@ -121,6 +121,12 @@ export default function StockTracker() {
           // Extract just the date part for comparison
           const targetDateStr = dateForHistorical; // Already in YYYY-MM-DD format
 
+          // Debug: Log available dates
+          console.log('Looking for date:', targetDateStr);
+          const allDates = [...new Set(filteredEntries.map(([ts]) => ts.split(' ')[0]))];
+          console.log('Available dates in data:', allDates.slice(0, 10));
+          console.log('Total timestamps:', filteredEntries.length);
+
           filteredEntries = filteredEntries.filter(([timestamp]) => {
             // Extract date from timestamp (format: "2024-01-15 09:30:00")
             const timestampDateStr = timestamp.split(' ')[0];
@@ -139,8 +145,10 @@ export default function StockTracker() {
             return timeInMinutes >= marketOpen && timeInMinutes <= firstHourEnd;
           });
 
+          console.log('Filtered entries for first hour:', filteredEntries.length);
+
           if (filteredEntries.length === 0) {
-            setError(`No trading data available for ${targetDateStr}. Market may have been closed.`);
+            setError(`No trading data available for ${targetDateStr}. Market may have been closed, or data is not available for dates older than 1-2 months.`);
             return;
           }
         } else {
