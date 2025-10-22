@@ -1,9 +1,9 @@
 application:
   name: stock-tracker
   pods:
-    # Frontend - React + Vite app served by nginx
+    # Frontend - React + Vite app served by nginx (with Alpha Vantage API key)
     - name: frontend
-      image: registry.nexlayer.io/nexlayer-mcp/bd8e4fe1-89c6-4a88-9474-98bb99b9fe2b/stock-tracker-dd3a397d-frontend:b1c04bf7-1761092699
+      image: registry.nexlayer.io/nexlayer-mcp/27f238fc-e737-436b-a116-fd53ad2006a5/stock-tracker-1fc3e8ab-frontend:10802772-1761094043
       path: /
       servicePorts:
         - 80
