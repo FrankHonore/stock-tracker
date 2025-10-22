@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { TrendingUp, TrendingDown, Activity, LogIn, LogOut, Settings } from 'lucide-react';
 import AuthModal from './components/AuthModal';
 import WebullCredentialsModal from './components/WebullCredentialsModal';
@@ -107,7 +107,8 @@ export default function StockTracker() {
           .map(([timestamp, values]) => ({
             time: new Date(timestamp).toLocaleTimeString('en-US', {
               hour: '2-digit',
-              minute: '2-digit'
+              minute: '2-digit',
+              timeZone: 'America/New_York'
             }),
             open: parseFloat(values['1. open']),
             high: parseFloat(values['2. high']),
@@ -286,40 +287,40 @@ export default function StockTracker() {
             <ResponsiveContainer width="100%" height={400}>
               <LineChart data={candleData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis 
-                  dataKey="time" 
+                <XAxis
+                  dataKey="time"
                   stroke="#9CA3AF"
                   tick={{ fill: '#9CA3AF' }}
                   angle={-45}
                   textAnchor="end"
                   height={70}
                 />
-                <YAxis 
+                <YAxis
                   stroke="#9CA3AF"
                   tick={{ fill: '#9CA3AF' }}
                   domain={['dataMin - 0.5', 'dataMax + 0.5']}
                 />
                 <Tooltip content={<CustomTooltip />} />
-                <Line 
-                  type="monotone" 
-                  dataKey="high" 
-                  stroke="#60A5FA" 
+                <Line
+                  type="monotone"
+                  dataKey="high"
+                  stroke="#60A5FA"
                   strokeWidth={2}
                   dot={false}
                   name="High"
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="close" 
-                  stroke="#34D399" 
+                <Line
+                  type="monotone"
+                  dataKey="close"
+                  stroke="#34D399"
                   strokeWidth={2}
                   dot={false}
                   name="Close"
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="low" 
-                  stroke="#EF4444" 
+                <Line
+                  type="monotone"
+                  dataKey="low"
+                  stroke="#EF4444"
                   strokeWidth={2}
                   dot={false}
                   name="Low"
