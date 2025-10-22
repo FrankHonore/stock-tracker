@@ -12,6 +12,10 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Set build-time environment variable for Vite
+ARG VITE_ALPHA_VANTAGE_API_KEY
+ENV VITE_ALPHA_VANTAGE_API_KEY=$VITE_ALPHA_VANTAGE_API_KEY
+
 # Build the application
 RUN npm run build
 
