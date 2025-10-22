@@ -76,11 +76,14 @@ export default function StockTracker() {
   };
 
   const fetchStockData = async (symbol, dateForHistorical = null) => {
+    console.log('fetchStockData called with:', { symbol, dateForHistorical });
     try {
       setError('');
 
       // Use Alpha Vantage API
       const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
+
+      console.log('API Key exists:', !!apiKey);
 
       if (!apiKey) {
         setError('API key not configured. Please add VITE_ALPHA_VANTAGE_API_KEY to .env file.');
@@ -89,24 +92,37 @@ export default function StockTracker() {
 
       // Use full outputsize for historical data to get more data points
       const outputsize = dateForHistorical ? 'full' : 'compact';
-      const response = await fetch(
-        `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=1min&apikey=${apiKey}&outputsize=${outputsize}`
-      );
+      const apiUrl = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=1min&apikey=${apiKey}&outputsize=${outputsize}`;
+
+      console.log('Fetching from API with outputsize:', outputsize);
+      const response = await fetch(apiUrl);
+
+      console.log('API Response status:', response.status);
 
       if (!response.ok) {
         throw new Error('Failed to fetch stock data');
       }
 
       const data = await response.json();
+      console.log('API Response data keys:', Object.keys(data));
+      console.log('Full API Response:', data);
 
       // Check for API errors
       if (data['Error Message']) {
+        console.error('API Error Message:', data['Error Message']);
         setError('Invalid stock symbol. Please try another symbol.');
         return;
       }
 
       if (data['Note']) {
+        console.error('API Note (rate limit):', data['Note']);
         setError('API rate limit reached. Free tier allows 25 requests per day.');
+        return;
+      }
+
+      if (data['Information']) {
+        console.error('API Information:', data['Information']);
+        setError(`Alpha Vantage API: ${data['Information']}`);
         return;
       }
 
@@ -192,6 +208,7 @@ export default function StockTracker() {
   };
 
   const handleTrackClick = async () => {
+    console.log('handleTrackClick called', { ticker, viewMode, selectedDate });
     if (!ticker.trim()) return;
 
     setLoading(true);
@@ -204,8 +221,10 @@ export default function StockTracker() {
 
     // Fetch data based on mode
     if (viewMode === 'historical') {
+      console.log('Fetching historical data for:', selectedDate);
       await fetchStockData(ticker.toUpperCase(), selectedDate);
     } else {
+      console.log('Fetching live data');
       await fetchStockData(ticker.toUpperCase());
       // Only set up auto-refresh in live mode
       intervalRef.current = setInterval(() => {
