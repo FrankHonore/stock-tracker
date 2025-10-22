@@ -9,14 +9,10 @@ COPY package*.json ./
 # Install dependencies
 RUN npm ci
 
-# Copy source code
+# Copy source code (including .env.production)
 COPY . .
 
-# Set build-time environment variable for Vite
-ARG VITE_ALPHA_VANTAGE_API_KEY
-ENV VITE_ALPHA_VANTAGE_API_KEY=$VITE_ALPHA_VANTAGE_API_KEY
-
-# Build the application
+# Build the application (Vite will use .env.production)
 RUN npm run build
 
 # Production stage - serve with nginx
