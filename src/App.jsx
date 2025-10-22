@@ -14,6 +14,11 @@ export default function StockTracker() {
   const [priceChange, setPriceChange] = useState(0);
   const intervalRef = useRef(null);
 
+  // Historical data state
+  const [viewMode, setViewMode] = useState('live'); // 'live' or 'historical'
+  const [selectedDate, setSelectedDate] = useState('');
+  const [maxDate, setMaxDate] = useState('');
+
   // Authentication state
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
@@ -30,6 +35,11 @@ export default function StockTracker() {
       setUser(JSON.parse(savedUser));
       checkWebullCredentials(savedToken);
     }
+
+    // Set max date to today
+    const today = new Date();
+    setMaxDate(today.toISOString().split('T')[0]);
+    setSelectedDate(today.toISOString().split('T')[0]);
   }, []);
 
   const checkWebullCredentials = async (authToken) => {
@@ -65,7 +75,7 @@ export default function StockTracker() {
     setHasWebullCredentials(true);
   };
 
-  const fetchStockData = async (symbol) => {
+  const fetchStockData = async (symbol, dateForHistorical = null) => {
     try {
       setError('');
 
@@ -77,8 +87,10 @@ export default function StockTracker() {
         return;
       }
 
+      // Use full outputsize for historical data to get more data points
+      const outputsize = dateForHistorical ? 'full' : 'compact';
       const response = await fetch(
-        `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=1min&apikey=${apiKey}&outputsize=compact`
+        `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=1min&apikey=${apiKey}&outputsize=${outputsize}`
       );
 
       if (!response.ok) {
@@ -101,15 +113,55 @@ export default function StockTracker() {
       const timeSeries = data['Time Series (1min)'];
 
       if (timeSeries && Object.keys(timeSeries).length > 0) {
+        let filteredEntries = Object.entries(timeSeries);
+
+        // If historical mode, filter to selected date and first hour of trading
+        if (dateForHistorical) {
+          const targetDate = new Date(dateForHistorical);
+          const targetDateStr = targetDate.toISOString().split('T')[0];
+
+          filteredEntries = filteredEntries.filter(([timestamp]) => {
+            const date = new Date(timestamp);
+            const dateStr = date.toISOString().split('T')[0];
+
+            // Check if it's the target date
+            if (dateStr !== targetDateStr) return false;
+
+            // Filter for first hour of trading (9:30 AM - 10:30 AM ET)
+            // Convert to ET time
+            const etTimeStr = date.toLocaleString('en-US', {
+              timeZone: 'America/New_York',
+              hour12: false,
+              hour: '2-digit',
+              minute: '2-digit'
+            });
+
+            const [hour, minute] = etTimeStr.split(':').map(Number);
+            const timeInMinutes = hour * 60 + minute;
+            const marketOpen = 9 * 60 + 30;  // 9:30 AM
+            const firstHourEnd = 10 * 60 + 30;  // 10:30 AM
+
+            return timeInMinutes >= marketOpen && timeInMinutes <= firstHourEnd;
+          });
+
+          if (filteredEntries.length === 0) {
+            setError(`No trading data available for ${targetDateStr}. Market may have been closed.`);
+            return;
+          }
+        } else {
+          // Live mode: get last 60 data points
+          filteredEntries = filteredEntries.slice(0, 60);
+        }
+
         // Transform Alpha Vantage format to our format
-        const formattedData = Object.entries(timeSeries)
-          .slice(0, 60) // Get last 60 data points
+        const formattedData = filteredEntries
           .map(([timestamp, values]) => ({
             time: new Date(timestamp).toLocaleTimeString('en-US', {
               hour: '2-digit',
               minute: '2-digit',
               timeZone: 'America/New_York'
             }),
+            fullDate: timestamp,
             open: parseFloat(values['1. open']),
             high: parseFloat(values['2. high']),
             low: parseFloat(values['3. low']),
@@ -141,17 +193,48 @@ export default function StockTracker() {
 
     setLoading(true);
     setCurrentTicker(ticker.toUpperCase());
-    
+
+    // Clear any existing intervals
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
     }
 
-    await fetchStockData(ticker.toUpperCase());
-    setLoading(false);
+    // Fetch data based on mode
+    if (viewMode === 'historical') {
+      await fetchStockData(ticker.toUpperCase(), selectedDate);
+    } else {
+      await fetchStockData(ticker.toUpperCase());
+      // Only set up auto-refresh in live mode
+      intervalRef.current = setInterval(() => {
+        fetchStockData(ticker.toUpperCase());
+      }, 60000);
+    }
 
-    intervalRef.current = setInterval(() => {
-      fetchStockData(ticker.toUpperCase());
-    }, 60000);
+    setLoading(false);
+  };
+
+  // Handle view mode change
+  const handleViewModeChange = (mode) => {
+    setViewMode(mode);
+    // Clear interval when switching to historical mode
+    if (mode === 'historical' && intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    // Clear data when switching modes
+    setCandleData([]);
+    setLastPrice(null);
+    setPriceChange(0);
+  };
+
+  // Handle date change in historical mode
+  const handleDateChange = async (newDate) => {
+    setSelectedDate(newDate);
+    // If we have a current ticker, refetch data for the new date
+    if (currentTicker && viewMode === 'historical') {
+      setLoading(true);
+      await fetchStockData(currentTicker, newDate);
+      setLoading(false);
+    }
   };
 
   const handleKeyPress = (e) => {
@@ -235,8 +318,33 @@ export default function StockTracker() {
           </div>
         </div>
 
-        <div className="mb-8">
-          <div className="flex gap-2 max-w-md mx-auto">
+        <div className="mb-8 max-w-2xl mx-auto">
+          {/* View Mode Toggle */}
+          <div className="flex justify-center gap-2 mb-4">
+            <button
+              onClick={() => handleViewModeChange('live')}
+              className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+                viewMode === 'live'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Live Data
+            </button>
+            <button
+              onClick={() => handleViewModeChange('historical')}
+              className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+                viewMode === 'historical'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Historical Data
+            </button>
+          </div>
+
+          {/* Ticker Input */}
+          <div className="flex gap-2">
             <input
               type="text"
               value={ticker}
@@ -253,6 +361,22 @@ export default function StockTracker() {
               {loading ? 'Loading...' : 'Track'}
             </button>
           </div>
+
+          {/* Date Picker for Historical Mode */}
+          {viewMode === 'historical' && (
+            <div className="mt-4">
+              <label className="block text-sm text-gray-400 mb-2">
+                Select Date (First Trading Hour: 9:30-10:30 AM ET)
+              </label>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => handleDateChange(e.target.value)}
+                max={maxDate}
+                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 text-white"
+              />
+            </div>
+          )}
         </div>
 
         {error && (
@@ -283,7 +407,9 @@ export default function StockTracker() {
 
         {candleData.length > 0 && (
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 mb-6">
-            <h3 className="text-xl font-semibold mb-4 text-gray-300">1-Minute Candle Chart</h3>
+            <h3 className="text-xl font-semibold mb-4 text-gray-300">
+              {viewMode === 'live' ? '1-Minute Candle Chart (Live)' : `First Trading Hour - ${selectedDate}`}
+            </h3>
             <ResponsiveContainer width="100%" height={400}>
               <LineChart data={candleData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
@@ -333,7 +459,9 @@ export default function StockTracker() {
         {candleData.length > 0 && (
           <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
             <div className="px-6 py-4 bg-gray-900 border-b border-gray-700">
-              <h3 className="text-xl font-semibold text-gray-300">Recent Candle Data</h3>
+              <h3 className="text-xl font-semibold text-gray-300">
+                {viewMode === 'live' ? 'Recent Candle Data' : 'Historical Trading Data (9:30-10:30 AM ET)'}
+              </h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
