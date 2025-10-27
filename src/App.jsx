@@ -14,10 +14,11 @@ export default function StockTracker() {
   const [priceChange, setPriceChange] = useState(0);
   const intervalRef = useRef(null);
 
-  // Historical data state
-  const [viewMode, setViewMode] = useState('live'); // 'live' or 'historical'
-  const [selectedDate, setSelectedDate] = useState('');
-  const [maxDate, setMaxDate] = useState('');
+  // Public.com API state
+  const [publicAccessToken, setPublicAccessToken] = useState(null);
+  const [publicAccountId, setPublicAccountId] = useState(null);
+  const [currentMinuteCandle, setCurrentMinuteCandle] = useState(null);
+  const quoteIntervalRef = useRef(null);
 
   // Authentication state
   const [user, setUser] = useState(null);
@@ -25,6 +26,40 @@ export default function StockTracker() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showCredentialsModal, setShowCredentialsModal] = useState(false);
   const [hasWebullCredentials, setHasWebullCredentials] = useState(false);
+
+  // Initialize Public.com API via backend proxy
+  const initializePublicAPI = async () => {
+    console.log('Initializing Public.com API via backend...');
+
+    try {
+      const response = await fetch('http://localhost:5001/api/public/initialize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      console.log('Initialize response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Initialize error:', errorData);
+        throw new Error(errorData.error || 'Failed to initialize API');
+      }
+
+      const data = await response.json();
+      console.log('✅ Public.com API initialized successfully!');
+
+      setPublicAccessToken(data.accessToken);
+      setPublicAccountId(data.accountId);
+
+      return true;
+    } catch (err) {
+      console.error('❌ Public API initialization error:', err);
+      setError(`Failed to initialize Public.com API: ${err.message}`);
+      return false;
+    }
+  };
 
   // Check for saved auth on load
   useEffect(() => {
@@ -36,10 +71,8 @@ export default function StockTracker() {
       checkWebullCredentials(savedToken);
     }
 
-    // Set max date to today
-    const today = new Date();
-    setMaxDate(today.toISOString().split('T')[0]);
-    setSelectedDate(today.toISOString().split('T')[0]);
+    // Initialize Public.com API
+    initializePublicAPI();
   }, []);
 
   const checkWebullCredentials = async (authToken) => {
@@ -75,132 +108,122 @@ export default function StockTracker() {
     setHasWebullCredentials(true);
   };
 
-  const fetchStockData = async (symbol, dateForHistorical = null) => {
-    console.log('fetchStockData called with:', { symbol, dateForHistorical });
+  // Fetch real-time quote from Public.com via backend proxy
+  const fetchQuote = async (symbol) => {
+    if (!publicAccountId) {
+      console.warn('Public API not initialized');
+      return null;
+    }
+
     try {
-      setError('');
-
-      // Use Alpha Vantage API
-      const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
-
-      console.log('API Key exists:', !!apiKey);
-
-      if (!apiKey) {
-        setError('API key not configured. Please add VITE_ALPHA_VANTAGE_API_KEY to .env file.');
-        return;
-      }
-
-      // Use full outputsize for historical data to get more data points
-      const outputsize = dateForHistorical ? 'full' : 'compact';
-      const apiUrl = `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=1min&apikey=${apiKey}&outputsize=${outputsize}`;
-
-      console.log('Fetching from API with outputsize:', outputsize);
-      const response = await fetch(apiUrl);
-
-      console.log('API Response status:', response.status);
+      const response = await fetch('http://localhost:5001/api/public/quote', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          symbol: symbol,
+          accountId: publicAccountId,
+        }),
+      });
 
       if (!response.ok) {
-        throw new Error('Failed to fetch stock data');
+        throw new Error('Failed to fetch quote');
       }
 
       const data = await response.json();
-      console.log('API Response data keys:', Object.keys(data));
-      console.log('Full API Response:', data);
 
-      // Check for API errors
-      if (data['Error Message']) {
-        console.error('API Error Message:', data['Error Message']);
-        setError('Invalid stock symbol. Please try another symbol.');
-        return;
+      if (data.quotes && data.quotes.length > 0) {
+        const quote = data.quotes[0];
+
+        if (quote.outcome !== 'SUCCESS') {
+          throw new Error('Invalid symbol or quote unavailable');
+        }
+
+        return {
+          price: parseFloat(quote.last),
+          timestamp: quote.lastTimestamp,
+          volume: parseInt(quote.volume || 0),
+          bid: parseFloat(quote.bid),
+          ask: parseFloat(quote.ask),
+        };
       }
 
-      if (data['Note']) {
-        console.error('API Note (rate limit):', data['Note']);
-        setError('API rate limit reached. Free tier allows 25 requests per day.');
-        return;
-      }
+      return null;
+    } catch (err) {
+      console.error('Error fetching quote:', err);
+      throw err;
+    }
+  };
 
-      if (data['Information']) {
-        console.error('API Information:', data['Information']);
-        setError(`Alpha Vantage API: ${data['Information']}`);
-        return;
-      }
+  // Build 1-minute candle from collected quotes
+  const updateCandleFromQuote = (quote) => {
+    const now = new Date();
+    const currentMinute = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), 0).getTime();
 
-      const timeSeries = data['Time Series (1min)'];
-
-      if (timeSeries && Object.keys(timeSeries).length > 0) {
-        let filteredEntries = Object.entries(timeSeries);
-
-        // If historical mode, filter to selected date and first hour of trading
-        if (dateForHistorical) {
-          // Alpha Vantage timestamps are in format "2024-01-15 09:30:00"
-          // Extract just the date part for comparison
-          const targetDateStr = dateForHistorical; // Already in YYYY-MM-DD format
-
-          // Debug: Log available dates
-          console.log('Looking for date:', targetDateStr);
-          const allDates = [...new Set(filteredEntries.map(([ts]) => ts.split(' ')[0]))];
-          console.log('Available dates in data:', allDates.slice(0, 10));
-          console.log('Total timestamps:', filteredEntries.length);
-
-          filteredEntries = filteredEntries.filter(([timestamp]) => {
-            // Extract date from timestamp (format: "2024-01-15 09:30:00")
-            const timestampDateStr = timestamp.split(' ')[0];
-
-            // Check if it's the target date
-            if (timestampDateStr !== targetDateStr) return false;
-
-            // Filter for first hour of trading (9:30 AM - 10:30 AM ET)
-            // Extract time from timestamp
-            const timePart = timestamp.split(' ')[1]; // "09:30:00"
-            const [hour, minute] = timePart.split(':').map(Number);
-            const timeInMinutes = hour * 60 + minute;
-            const marketOpen = 9 * 60 + 30;  // 9:30 AM
-            const firstHourEnd = 10 * 60 + 30;  // 10:30 AM
-
-            return timeInMinutes >= marketOpen && timeInMinutes <= firstHourEnd;
+    setCurrentMinuteCandle((prevCandle) => {
+      // If this is a new minute or first quote
+      if (!prevCandle || prevCandle.timestamp !== currentMinute) {
+        // Save previous candle to history if it exists
+        if (prevCandle) {
+          setCandleData((prevData) => {
+            const newData = [...prevData, prevCandle];
+            // Keep last 60 candles
+            return newData.slice(-60);
           });
-
-          console.log('Filtered entries for first hour:', filteredEntries.length);
-
-          if (filteredEntries.length === 0) {
-            setError(`No trading data available for ${targetDateStr}. Market may have been closed, or data is not available for dates older than 1-2 months.`);
-            return;
-          }
-        } else {
-          // Live mode: get last 60 data points
-          filteredEntries = filteredEntries.slice(0, 60);
         }
 
-        // Transform Alpha Vantage format to our format
-        const formattedData = filteredEntries
-          .map(([timestamp, values]) => ({
-            time: new Date(timestamp).toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit',
-              timeZone: 'America/New_York'
-            }),
-            fullDate: timestamp,
-            open: parseFloat(values['1. open']),
-            high: parseFloat(values['2. high']),
-            low: parseFloat(values['3. low']),
-            close: parseFloat(values['4. close']),
-            volume: parseInt(values['5. volume']),
-            timestamp: new Date(timestamp).getTime()
-          }))
-          .reverse() // Alpha Vantage returns newest first, we want oldest first
-          .sort((a, b) => a.timestamp - b.timestamp);
-
-        setCandleData(formattedData);
-
-        if (formattedData.length > 0) {
-          const latest = formattedData[formattedData.length - 1];
-          const previous = formattedData[0];
-          setLastPrice(latest.close);
-          setPriceChange(((latest.close - previous.close) / previous.close) * 100);
-        }
+        // Start new candle
+        return {
+          timestamp: currentMinute,
+          time: now.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'America/New_York',
+          }),
+          fullDate: now.toISOString(),
+          open: quote.price,
+          high: quote.price,
+          low: quote.price,
+          close: quote.price,
+          volume: quote.volume,
+        };
       } else {
-        setError('No data available. Market may be closed or symbol is invalid.');
+        // Update existing candle
+        return {
+          ...prevCandle,
+          high: Math.max(prevCandle.high, quote.price),
+          low: Math.min(prevCandle.low, quote.price),
+          close: quote.price,
+          volume: quote.volume, // Public API returns total volume
+        };
+      }
+    });
+  };
+
+  // Fetch stock data using Public.com real-time quotes via backend
+  const fetchStockData = async (symbol) => {
+    console.log('fetchStockData called with:', { symbol });
+
+    if (!publicAccountId) {
+      setError('Public.com API not initialized. Please start the backend server.');
+      return;
+    }
+
+    try {
+      setError('');
+
+      // Fetch initial quote
+      const quote = await fetchQuote(symbol);
+
+      if (quote) {
+        // Update current price
+        setLastPrice(quote.price);
+
+        // Initialize candle building
+        updateCandleFromQuote(quote);
+      } else {
+        setError('No data available. Please check the symbol and try again.');
       }
     } catch (err) {
       setError(err.message || 'Failed to fetch stock data');
@@ -208,56 +231,54 @@ export default function StockTracker() {
   };
 
   const handleTrackClick = async () => {
-    console.log('handleTrackClick called', { ticker, viewMode, selectedDate });
+    console.log('handleTrackClick called', { ticker });
     if (!ticker.trim()) return;
 
     setLoading(true);
     setCurrentTicker(ticker.toUpperCase());
 
     // Clear any existing intervals
+    if (quoteIntervalRef.current) {
+      clearInterval(quoteIntervalRef.current);
+    }
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
     }
 
-    // Fetch data based on mode
-    if (viewMode === 'historical') {
-      console.log('Fetching historical data for:', selectedDate);
-      await fetchStockData(ticker.toUpperCase(), selectedDate);
-    } else {
-      console.log('Fetching live data');
-      await fetchStockData(ticker.toUpperCase());
-      // Only set up auto-refresh in live mode
-      intervalRef.current = setInterval(() => {
-        fetchStockData(ticker.toUpperCase());
-      }, 60000);
-    }
+    // Reset candle data
+    setCandleData([]);
+    setCurrentMinuteCandle(null);
+
+    // Fetch initial quote
+    await fetchStockData(ticker.toUpperCase());
+
+    // Set up quote polling every 5 seconds
+    quoteIntervalRef.current = setInterval(async () => {
+      try {
+        const quote = await fetchQuote(ticker.toUpperCase());
+        if (quote) {
+          setLastPrice(quote.price);
+          updateCandleFromQuote(quote);
+
+          // Calculate price change from first candle
+          setCandleData((prevData) => {
+            if (prevData.length > 0) {
+              const firstCandle = prevData[0];
+              const currentPrice = quote.price;
+              setPriceChange(((currentPrice - firstCandle.open) / firstCandle.open) * 100);
+            }
+            return prevData;
+          });
+        }
+      } catch (err) {
+        console.error('Error polling quote:', err);
+      }
+    }, 5000); // Poll every 5 seconds
 
     setLoading(false);
   };
 
-  // Handle view mode change
-  const handleViewModeChange = (mode) => {
-    setViewMode(mode);
-    // Clear interval when switching to historical mode
-    if (mode === 'historical' && intervalRef.current) {
-      clearInterval(intervalRef.current);
-    }
-    // Clear data when switching modes
-    setCandleData([]);
-    setLastPrice(null);
-    setPriceChange(0);
-  };
-
-  // Handle date change in historical mode
-  const handleDateChange = async (newDate) => {
-    setSelectedDate(newDate);
-    // If we have a current ticker, refetch data for the new date
-    if (currentTicker && viewMode === 'historical') {
-      setLoading(true);
-      await fetchStockData(currentTicker, newDate);
-      setLoading(false);
-    }
-  };
+  // Note: Historical mode removed - Public.com API only supports real-time quotes
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter') {
@@ -269,6 +290,9 @@ export default function StockTracker() {
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
+      }
+      if (quoteIntervalRef.current) {
+        clearInterval(quoteIntervalRef.current);
       }
     };
   }, []);
@@ -341,30 +365,6 @@ export default function StockTracker() {
         </div>
 
         <div className="mb-8 max-w-2xl mx-auto">
-          {/* View Mode Toggle */}
-          <div className="flex justify-center gap-2 mb-4">
-            <button
-              onClick={() => handleViewModeChange('live')}
-              className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
-                viewMode === 'live'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-            >
-              Live Data
-            </button>
-            <button
-              onClick={() => handleViewModeChange('historical')}
-              className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
-                viewMode === 'historical'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-            >
-              Historical Data
-            </button>
-          </div>
-
           {/* Ticker Input */}
           <div className="flex gap-2">
             <input
@@ -383,22 +383,9 @@ export default function StockTracker() {
               {loading ? 'Loading...' : 'Track'}
             </button>
           </div>
-
-          {/* Date Picker for Historical Mode */}
-          {viewMode === 'historical' && (
-            <div className="mt-4">
-              <label className="block text-sm text-gray-400 mb-2">
-                Select Date (First Trading Hour: 9:30-10:30 AM ET)
-              </label>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => handleDateChange(e.target.value)}
-                max={maxDate}
-                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 text-white"
-              />
-            </div>
-          )}
+          <p className="mt-2 text-sm text-gray-400 text-center">
+            Real-time quotes updated every 5 seconds • Powered by Public.com API
+          </p>
         </div>
 
         {error && (
@@ -430,7 +417,7 @@ export default function StockTracker() {
         {candleData.length > 0 && (
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 mb-6">
             <h3 className="text-xl font-semibold mb-4 text-gray-300">
-              {viewMode === 'live' ? '1-Minute Candle Chart (Live)' : `First Trading Hour - ${selectedDate}`}
+              1-Minute Candle Chart (Real-Time)
             </h3>
             <ResponsiveContainer width="100%" height={400}>
               <LineChart data={candleData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
@@ -482,7 +469,7 @@ export default function StockTracker() {
           <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
             <div className="px-6 py-4 bg-gray-900 border-b border-gray-700">
               <h3 className="text-xl font-semibold text-gray-300">
-                {viewMode === 'live' ? 'Recent Candle Data' : 'Historical Trading Data (9:30-10:30 AM ET)'}
+                Recent Candle Data
               </h3>
             </div>
             <div className="overflow-x-auto">

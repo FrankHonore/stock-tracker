@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A real-time stock tracking application built with React and Vite that displays 1-minute candle data from Webull's API. The app provides live price updates, charts, and detailed OHLC (Open/High/Low/Close) data for stock tickers.
+A real-time stock tracking application built with React and Vite that displays 1-minute candle data built from Public.com's real-time quote API. The app polls for quotes every 5 seconds, constructs 1-minute OHLC (Open/High/Low/Close) candles, and provides live price updates and charts for stock tickers.
 
 ## Development Commands
 
@@ -39,17 +39,24 @@ The app is a single-page application with all main logic in `src/App.jsx`:
 - Uses `useRef` for interval management to prevent memory leaks
 
 **Data Flow:**
-1. User enters ticker symbol
-2. `fetchStockData()` (App.jsx:15) fetches from Webull API
-3. Data transformed into chart-friendly format with timestamps (App.jsx:29-40)
-4. Auto-refresh every 60 seconds via setInterval (App.jsx:69-71)
-5. Charts and table update reactively
+1. On app load, exchange Public.com API secret for access token (App.jsx:35-84)
+2. Get accountId from Public.com API (App.jsx:65-77)
+3. User enters ticker symbol
+4. `fetchQuote()` fetches real-time quote from Public.com API (App.jsx:139-189)
+5. `updateCandleFromQuote()` builds 1-minute OHLC candles from quotes (App.jsx:192-234)
+6. Quotes polled every 5 seconds to update current candle (App.jsx:289-309)
+7. New candle created every minute, maintaining rolling 60-candle history
+8. Charts and table update reactively
 
 **API Integration:**
-- Endpoint: `https://quotes-gw.webullfintech.com/api/stock/capitalflow/ticker`
-- Parameters: `tickerId`, `type=1m`, `count=60`
-- Response contains OHLC candle data with timestamps
-- No authentication required
+- **Authentication:**
+  - Exchange API secret for access token: `POST https://api.public.com/userapiauthservice/personal/access-tokens`
+  - Get account info: `GET https://api.public.com/userapigateway/trading/account`
+- **Quote Endpoint:** `POST https://api.public.com/userapigateway/marketdata/{accountId}/quotes`
+- **Authentication:** Bearer token in Authorization header
+- **Request Body:** JSON with instruments array (symbol, type: 'EQUITY')
+- **Response:** Quote data including last price, timestamp, bid, ask, volume
+- **Polling Frequency:** Every 5 seconds to build real-time candles
 
 ### Key Components
 
@@ -65,19 +72,31 @@ The app is a single-page application with all main logic in `src/App.jsx`:
 
 ### Important Implementation Details
 
-**Auto-refresh Pattern:**
-- Uses `intervalRef` to store setInterval ID
+**Real-time Quote Polling:**
+- Uses `quoteIntervalRef` to store quote polling interval ID
+- Polls Public.com API every 5 seconds for real-time quotes
 - Clears existing interval before creating new one (prevents multiple intervals)
-- Cleanup in useEffect return function (App.jsx:80-86) prevents memory leaks
+- Cleanup in useEffect return function (App.jsx:322-330) prevents memory leaks
+
+**Candle Building Logic:**
+- Each quote updates the current minute's candle (open, high, low, close)
+- When a new minute starts, previous candle is saved to history
+- Maintains rolling 60-candle history (last 60 minutes)
+- Current candle tracked in `currentMinuteCandle` state
 
 **Price Calculation:**
-- Price change % calculated from first to last candle in dataset (App.jsx:48)
-- Not from market open, just from first data point received
+- Price change % calculated from first candle's open to current price
+- Updates on every quote (every 5 seconds)
 
 **Data Formatting:**
-- Times formatted as locale string with 2-digit hour/minute (App.jsx:30-32)
+- Times formatted as locale string with 2-digit hour/minute in America/New_York timezone
 - Volumes displayed in millions (e.g., "2.5M")
 - Prices fixed to 2 decimal places
+
+**API Configuration:**
+- Requires `VITE_PUBLIC_API_SECRET` in .env file
+- Secret obtained from Public.com account settings > Security > API Keys
+- Access token refreshed with 60-minute validity
 
 ## File Organization
 
