@@ -1,0 +1,54 @@
+application:
+  name: stock-tracker
+  pods:
+    # Frontend - React + Vite app served by nginx (with Alpha Vantage API key)
+    - name: frontend
+      image: registry.nexlayer.io/nexlayer-mcp/27f238fc-e737-436b-a116-fd53ad2006a5/stock-tracker-1fc3e8ab-frontend:10802772-1761094043
+      path: /
+      servicePorts:
+        - 80
+
+    # Backend - Express API server
+    - name: backend
+      image: registry.nexlayer.io/nexlayer-mcp/bd8e4fe1-89c6-4a88-9474-98bb99b9fe2b/stock-tracker-dd3a397d-backend:b1c04bf7-1761092699
+      servicePorts:
+        - 5000
+      vars:
+        PORT: "5000"
+        NODE_ENV: production
+        CLIENT_URL: <% URL %>
+        DB_HOST: database.pod
+        DB_PORT: "5432"
+        DB_NAME: stock_tracker
+        DB_USER: postgres
+        DB_PASSWORD: nexlayer_postgres_2024
+        JWT_SECRET: nexlayer_jwt_secret_change_in_production_2024
+        JWT_EXPIRES_IN: 7d
+        ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+    # Database - PostgreSQL
+    - name: database
+      image: postgres:16-alpine
+      servicePorts:
+        - 5432
+      vars:
+        POSTGRES_DB: stock_tracker
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: nexlayer_postgres_2024
+        PGDATA: /var/lib/postgresql/data/pgdata
+      volumes:
+        - name: postgres-data
+          size: 2Gi
+          mountPath: /var/lib/postgresql
+
+    # Database Migration - Runs schema initialization
+    - name: migrate
+      image: registry.nexlayer.io/nexlayer-mcp/1aca0497-32cf-4760-b771-d5099f049888/stock-tracker-dd3a397d-migrate:ffe59e9e-1761093457
+      servicePorts:
+        - 5000
+      vars:
+        DB_HOST: database.pod
+        DB_PORT: "5432"
+        DB_NAME: stock_tracker
+        DB_USER: postgres
+        DB_PASSWORD: nexlayer_postgres_2024

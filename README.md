@@ -1,15 +1,17 @@
-# Stock Tracker with Webull Integration
+# Stock Tracker with Public.com API
 
-A real-time stock tracking application with user authentication and secure Webull credential storage.
+A real-time stock tracking application that builds 1-minute OHLC candles from Public.com's real-time quote API.
 
 ## Features
 
-- **Real-time Stock Data**: 1-minute candle data from Webull's API
-- **User Authentication**: Secure JWT-based authentication
-- **Webull Credentials**: Encrypted storage of Webull login credentials
+- **Real-time Stock Data**: 1-minute candle data built from Public.com API quotes
+- **Quote Polling**: Fetches quotes every 5 seconds to build accurate OHLC candles
+- **Live Candle Building**: Constructs open/high/low/close data in real-time
 - **Interactive Charts**: Line charts showing high/low/close prices
-- **Auto-refresh**: Data updates every 60 seconds
+- **Rolling History**: Maintains last 60 minutes of candle data
 - **Responsive Design**: Built with Tailwind CSS
+- **User Authentication**: Secure JWT-based authentication (optional)
+- **Webull Integration**: Legacy support for Webull credentials (optional)
 
 ## Tech Stack
 
@@ -30,10 +32,100 @@ A real-time stock tracking application with user authentication and secure Webul
 ## Prerequisites
 
 - Node.js (v16 or higher)
-- PostgreSQL (v12 or higher)
 - npm or yarn
+- **Public.com Account** with API access
+- PostgreSQL (v12 or higher) - Optional, only needed for user authentication features
 
-## Setup Instructions
+## Quick Start (Frontend Only)
+
+If you just want to use the stock tracker without backend features:
+
+### 1. Get Public.com API Credentials
+
+1. Create or login to your account at [public.com](https://public.com)
+2. Navigate to Account Settings → Security → API Keys
+3. Generate a new API secret key
+4. Copy the secret key (you'll need it in the next step)
+
+### 2. Configure Environment Variables
+
+**For Local Development:**
+
+```bash
+# Copy the .env example file
+cp .env.example .env
+```
+
+Edit `.env` and add your Public.com API secret:
+
+```env
+VITE_PUBLIC_API_SECRET=your_public_api_secret_here
+```
+
+**For Production (GitHub Actions):**
+
+See the [GitHub Secrets Setup](#github-secrets-setup) section below.
+
+### 3. Install and Run
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+The app will open at http://localhost:3000. Enter a stock ticker (e.g., AAPL) and click "Track" to see real-time data!
+
+## GitHub Secrets Setup
+
+For production builds using GitHub Actions, store your API secret securely using GitHub Secrets instead of committing it to your repository.
+
+### Step 1: Add Secret to GitHub Repository
+
+1. Go to your GitHub repository
+2. Click **Settings** → **Secrets and variables** → **Actions**
+3. Click **New repository secret**
+4. Add the following secret:
+   - **Name**: `VITE_PUBLIC_API_SECRET`
+   - **Value**: Your Public.com API secret key
+5. Click **Add secret**
+
+### Step 2: GitHub Actions Workflow
+
+A GitHub Actions workflow is already configured in `.github/workflows/build.yml` that:
+
+- ✅ Automatically builds your app on every push to main
+- ✅ Uses the GitHub secret for the API key (never exposed in code)
+- ✅ Creates build artifacts you can download
+- ✅ Optionally deploys to GitHub Pages (commented out by default)
+
+### Step 3: Verify the Build
+
+1. Push your code to GitHub
+2. Go to the **Actions** tab in your repository
+3. You should see the "Build and Deploy" workflow running
+4. Once complete, download the build artifacts from the workflow run
+
+### Step 4: Enable GitHub Pages Deployment (Optional)
+
+To automatically deploy to GitHub Pages:
+
+1. Uncomment the `deploy` job in `.github/workflows/build.yml`
+2. Go to **Settings** → **Pages**
+3. Under **Source**, select "GitHub Actions"
+4. Push to main branch - your app will automatically deploy!
+
+### Security Benefits
+
+✅ **API keys never committed to repository**
+✅ **Secrets encrypted by GitHub**
+✅ **Different secrets per environment (dev/prod)**
+✅ **Only accessible to authorized workflow runs**
+✅ **Can be rotated without code changes**
+
+## Full Setup Instructions (with Backend)
 
 ### 1. Database Setup
 
@@ -138,43 +230,78 @@ Frontend will start on http://localhost:3000
 
 ## Usage
 
-### 1. Create an Account
+### Track Stocks
 
 1. Open http://localhost:3000
-2. Click "Login / Sign Up"
-3. Switch to "Sign Up" tab
-4. Enter email, username, and password
-5. Click "Sign Up"
+2. Enter a stock ticker symbol (e.g., AAPL, TSLA, MSFT)
+3. Click "Track"
+4. Watch real-time candle data build:
+   - Quotes fetched every 5 seconds
+   - 1-minute candles constructed in real-time
+   - Charts and price changes update live
+   - Rolling 60-minute history maintained
 
-### 2. Add Webull Credentials
+### How It Works
 
-1. After logging in, click "Add Webull Credentials"
-2. Enter your Webull email or phone (format: +1-5555555555)
-3. Enter your Webull password
-4. Check MFA if you have multi-factor auth enabled
-5. Click "Save Credentials"
+The app uses Public.com's real-time quote API to build traditional candlestick data:
+
+1. **Quote Polling**: Every 5 seconds, the app fetches the current stock quote
+2. **Candle Building**: Each quote updates the current minute's OHLC data:
+   - **Open**: First quote price of the minute
+   - **High**: Highest quote price seen in the minute
+   - **Low**: Lowest quote price seen in the minute
+   - **Close**: Most recent quote price
+   - **Volume**: Total trading volume
+3. **History**: When a new minute starts, the previous candle is saved to history
+4. **Display**: Charts and tables update automatically to show the latest data
+
+### Optional: User Authentication (Backend Required)
+
+If you've set up the backend server:
+
+1. Click "Login / Sign Up"
+2. Create an account or sign in
+3. Optionally add Webull credentials (legacy feature)
 
 **Security Notes:**
 - Credentials are encrypted using AES-256-GCM
 - Passwords are never stored in plain text
 - The encryption key must be kept secret
 
-### 3. Track Stocks
-
-1. Enter a stock ticker (e.g., AAPL, TSLA, MSFT)
-2. Click "Track"
-3. View real-time candle data, charts, and price changes
-4. Data refreshes automatically every 60 seconds
-
 ## API Endpoints
 
-### Authentication
+### Public.com API (External)
+
+The app uses these Public.com API endpoints:
+
+**Authentication:**
+- \`POST https://api.public.com/userapiauthservice/personal/access-tokens\`
+  - Exchange API secret for access token
+  - Request: \`{ "secret": "...", "validityInMinutes": 60 }\`
+  - Response: \`{ "accessToken": "..." }\`
+
+**Market Data:**
+- \`GET https://api.public.com/userapigateway/trading/account\`
+  - Get account information (including accountId)
+  - Requires: Bearer token in Authorization header
+
+- \`POST https://api.public.com/userapigateway/marketdata/{accountId}/quotes\`
+  - Get real-time stock quotes
+  - Request: \`{ "instruments": [{ "symbol": "AAPL", "type": "EQUITY" }] }\`
+  - Response: Quote data including last price, bid, ask, volume
+  - Polled every 5 seconds by the app
+
+### Backend API (Optional)
+
+If using the backend server:
+
+**Authentication:**
 - \`POST /api/auth/register\` - Register new user
 - \`POST /api/auth/login\` - Login user
 - \`GET /api/auth/profile\` - Get user profile (requires auth)
 - \`PUT /api/auth/profile\` - Update profile (requires auth)
 
-### Webull Integration
+**Webull Integration (Legacy):**
 - \`POST /api/webull/credentials\` - Store Webull credentials (requires auth)
 - \`GET /api/webull/credentials\` - Get stored credentials (requires auth)
 - \`DELETE /api/webull/credentials\` - Delete credentials (requires auth)
@@ -185,12 +312,20 @@ Frontend will start on http://localhost:3000
 
 ⚠️ **Important Security Notes:**
 
-1. **Unofficial API**: This app uses unofficial Webull APIs that may change or break at any time
+### Public.com API
+1. **✅ Use GitHub Secrets**: For production, always use GitHub Secrets (see [GitHub Secrets Setup](#github-secrets-setup))
+2. **API Secret Protection**: Never commit your \`.env\` file or Public.com API secret to version control
+3. **Client-Side Exposure**: The API secret is embedded in the built JavaScript - consider using a backend proxy for sensitive production apps
+4. **Access Token**: Tokens expire after the configured validity period (60 minutes by default)
+5. **API Usage**: Respect Public.com's API rate limits and terms of service
+6. **Local Development**: Use \`.env\` files for local development only (already in .gitignore)
+
+### Legacy Webull Integration (Optional)
+1. **Unofficial API**: Uses unofficial Webull APIs that may change or break at any time
 2. **Credential Storage**: Storing user credentials is a significant security liability
 3. **Outdated Packages**: The \`webull-api-ts\` package is 5 years old and in BETA
-4. **Production Use**: Not recommended for production without thorough security audit
-5. **Encryption Keys**: Never commit \`.env\` file or encryption keys to version control
-6. **HTTPS**: Use HTTPS in production to protect data in transit
+4. **Encryption Keys**: Never commit encryption keys to version control
+5. **HTTPS**: Use HTTPS in production to protect data in transit
 
 ### Recommended for Production:
 - Use official Webull API if available

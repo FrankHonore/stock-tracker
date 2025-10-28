@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { TrendingUp, TrendingDown, Activity, LogIn, LogOut, Settings } from 'lucide-react';
 import AuthModal from './components/AuthModal';
 import WebullCredentialsModal from './components/WebullCredentialsModal';
@@ -14,12 +14,52 @@ export default function StockTracker() {
   const [priceChange, setPriceChange] = useState(0);
   const intervalRef = useRef(null);
 
+  // Public.com API state
+  const [publicAccessToken, setPublicAccessToken] = useState(null);
+  const [publicAccountId, setPublicAccountId] = useState(null);
+  const [currentMinuteCandle, setCurrentMinuteCandle] = useState(null);
+  const quoteIntervalRef = useRef(null);
+
   // Authentication state
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showCredentialsModal, setShowCredentialsModal] = useState(false);
   const [hasWebullCredentials, setHasWebullCredentials] = useState(false);
+
+  // Initialize Public.com API via backend proxy
+  const initializePublicAPI = async () => {
+    console.log('Initializing Public.com API via backend...');
+
+    try {
+      const response = await fetch('http://localhost:5001/api/public/initialize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      console.log('Initialize response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Initialize error:', errorData);
+        throw new Error(errorData.error || 'Failed to initialize API');
+      }
+
+      const data = await response.json();
+      console.log('✅ Public.com API initialized successfully!');
+
+      setPublicAccessToken(data.accessToken);
+      setPublicAccountId(data.accountId);
+
+      return true;
+    } catch (err) {
+      console.error('❌ Public API initialization error:', err);
+      setError(`Failed to initialize Public.com API: ${err.message}`);
+      return false;
+    }
+  };
 
   // Check for saved auth on load
   useEffect(() => {
@@ -30,6 +70,9 @@ export default function StockTracker() {
       setUser(JSON.parse(savedUser));
       checkWebullCredentials(savedToken);
     }
+
+    // Initialize Public.com API
+    initializePublicAPI();
   }, []);
 
   const checkWebullCredentials = async (authToken) => {
@@ -65,70 +108,122 @@ export default function StockTracker() {
     setHasWebullCredentials(true);
   };
 
-  const fetchStockData = async (symbol) => {
+  // Fetch real-time quote from Public.com via backend proxy
+  const fetchQuote = async (symbol) => {
+    if (!publicAccountId) {
+      console.warn('Public API not initialized');
+      return null;
+    }
+
     try {
-      setError('');
-
-      // Use Alpha Vantage API
-      const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
-
-      if (!apiKey) {
-        setError('API key not configured. Please add VITE_ALPHA_VANTAGE_API_KEY to .env file.');
-        return;
-      }
-
-      const response = await fetch(
-        `https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=1min&apikey=${apiKey}&outputsize=compact`
-      );
+      const response = await fetch('http://localhost:5001/api/public/quote', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          symbol: symbol,
+          accountId: publicAccountId,
+        }),
+      });
 
       if (!response.ok) {
-        throw new Error('Failed to fetch stock data');
+        throw new Error('Failed to fetch quote');
       }
 
       const data = await response.json();
 
-      // Check for API errors
-      if (data['Error Message']) {
-        setError('Invalid stock symbol. Please try another symbol.');
-        return;
-      }
+      if (data.quotes && data.quotes.length > 0) {
+        const quote = data.quotes[0];
 
-      if (data['Note']) {
-        setError('API rate limit reached. Free tier allows 25 requests per day.');
-        return;
-      }
-
-      const timeSeries = data['Time Series (1min)'];
-
-      if (timeSeries && Object.keys(timeSeries).length > 0) {
-        // Transform Alpha Vantage format to our format
-        const formattedData = Object.entries(timeSeries)
-          .slice(0, 60) // Get last 60 data points
-          .map(([timestamp, values]) => ({
-            time: new Date(timestamp).toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit'
-            }),
-            open: parseFloat(values['1. open']),
-            high: parseFloat(values['2. high']),
-            low: parseFloat(values['3. low']),
-            close: parseFloat(values['4. close']),
-            volume: parseInt(values['5. volume']),
-            timestamp: new Date(timestamp).getTime()
-          }))
-          .reverse() // Alpha Vantage returns newest first, we want oldest first
-          .sort((a, b) => a.timestamp - b.timestamp);
-
-        setCandleData(formattedData);
-
-        if (formattedData.length > 0) {
-          const latest = formattedData[formattedData.length - 1];
-          const previous = formattedData[0];
-          setLastPrice(latest.close);
-          setPriceChange(((latest.close - previous.close) / previous.close) * 100);
+        if (quote.outcome !== 'SUCCESS') {
+          throw new Error('Invalid symbol or quote unavailable');
         }
+
+        return {
+          price: parseFloat(quote.last),
+          timestamp: quote.lastTimestamp,
+          volume: parseInt(quote.volume || 0),
+          bid: parseFloat(quote.bid),
+          ask: parseFloat(quote.ask),
+        };
+      }
+
+      return null;
+    } catch (err) {
+      console.error('Error fetching quote:', err);
+      throw err;
+    }
+  };
+
+  // Build 1-minute candle from collected quotes
+  const updateCandleFromQuote = (quote) => {
+    const now = new Date();
+    const currentMinute = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), 0).getTime();
+
+    setCurrentMinuteCandle((prevCandle) => {
+      // If this is a new minute or first quote
+      if (!prevCandle || prevCandle.timestamp !== currentMinute) {
+        // Save previous candle to history if it exists
+        if (prevCandle) {
+          setCandleData((prevData) => {
+            const newData = [...prevData, prevCandle];
+            // Keep last 60 candles
+            return newData.slice(-60);
+          });
+        }
+
+        // Start new candle
+        return {
+          timestamp: currentMinute,
+          time: now.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'America/New_York',
+          }),
+          fullDate: now.toISOString(),
+          open: quote.price,
+          high: quote.price,
+          low: quote.price,
+          close: quote.price,
+          volume: quote.volume,
+        };
       } else {
-        setError('No data available. Market may be closed or symbol is invalid.');
+        // Update existing candle
+        return {
+          ...prevCandle,
+          high: Math.max(prevCandle.high, quote.price),
+          low: Math.min(prevCandle.low, quote.price),
+          close: quote.price,
+          volume: quote.volume, // Public API returns total volume
+        };
+      }
+    });
+  };
+
+  // Fetch stock data using Public.com real-time quotes via backend
+  const fetchStockData = async (symbol) => {
+    console.log('fetchStockData called with:', { symbol });
+
+    if (!publicAccountId) {
+      setError('Public.com API not initialized. Please start the backend server.');
+      return;
+    }
+
+    try {
+      setError('');
+
+      // Fetch initial quote
+      const quote = await fetchQuote(symbol);
+
+      if (quote) {
+        // Update current price
+        setLastPrice(quote.price);
+
+        // Initialize candle building
+        updateCandleFromQuote(quote);
+      } else {
+        setError('No data available. Please check the symbol and try again.');
       }
     } catch (err) {
       setError(err.message || 'Failed to fetch stock data');
@@ -136,22 +231,54 @@ export default function StockTracker() {
   };
 
   const handleTrackClick = async () => {
+    console.log('handleTrackClick called', { ticker });
     if (!ticker.trim()) return;
 
     setLoading(true);
     setCurrentTicker(ticker.toUpperCase());
-    
+
+    // Clear any existing intervals
+    if (quoteIntervalRef.current) {
+      clearInterval(quoteIntervalRef.current);
+    }
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
     }
 
-    await fetchStockData(ticker.toUpperCase());
-    setLoading(false);
+    // Reset candle data
+    setCandleData([]);
+    setCurrentMinuteCandle(null);
 
-    intervalRef.current = setInterval(() => {
-      fetchStockData(ticker.toUpperCase());
-    }, 60000);
+    // Fetch initial quote
+    await fetchStockData(ticker.toUpperCase());
+
+    // Set up quote polling every 5 seconds
+    quoteIntervalRef.current = setInterval(async () => {
+      try {
+        const quote = await fetchQuote(ticker.toUpperCase());
+        if (quote) {
+          setLastPrice(quote.price);
+          updateCandleFromQuote(quote);
+
+          // Calculate price change from first candle
+          setCandleData((prevData) => {
+            if (prevData.length > 0) {
+              const firstCandle = prevData[0];
+              const currentPrice = quote.price;
+              setPriceChange(((currentPrice - firstCandle.open) / firstCandle.open) * 100);
+            }
+            return prevData;
+          });
+        }
+      } catch (err) {
+        console.error('Error polling quote:', err);
+      }
+    }, 5000); // Poll every 5 seconds
+
+    setLoading(false);
   };
+
+  // Note: Historical mode removed - Public.com API only supports real-time quotes
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter') {
@@ -163,6 +290,9 @@ export default function StockTracker() {
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
+      }
+      if (quoteIntervalRef.current) {
+        clearInterval(quoteIntervalRef.current);
       }
     };
   }, []);
@@ -234,8 +364,9 @@ export default function StockTracker() {
           </div>
         </div>
 
-        <div className="mb-8">
-          <div className="flex gap-2 max-w-md mx-auto">
+        <div className="mb-8 max-w-2xl mx-auto">
+          {/* Ticker Input */}
+          <div className="flex gap-2">
             <input
               type="text"
               value={ticker}
@@ -252,6 +383,9 @@ export default function StockTracker() {
               {loading ? 'Loading...' : 'Track'}
             </button>
           </div>
+          <p className="mt-2 text-sm text-gray-400 text-center">
+            Real-time quotes updated every 5 seconds • Powered by Public.com API
+          </p>
         </div>
 
         {error && (
@@ -282,44 +416,46 @@ export default function StockTracker() {
 
         {candleData.length > 0 && (
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 mb-6">
-            <h3 className="text-xl font-semibold mb-4 text-gray-300">1-Minute Candle Chart</h3>
+            <h3 className="text-xl font-semibold mb-4 text-gray-300">
+              1-Minute Candle Chart (Real-Time)
+            </h3>
             <ResponsiveContainer width="100%" height={400}>
               <LineChart data={candleData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis 
-                  dataKey="time" 
+                <XAxis
+                  dataKey="time"
                   stroke="#9CA3AF"
                   tick={{ fill: '#9CA3AF' }}
                   angle={-45}
                   textAnchor="end"
                   height={70}
                 />
-                <YAxis 
+                <YAxis
                   stroke="#9CA3AF"
                   tick={{ fill: '#9CA3AF' }}
                   domain={['dataMin - 0.5', 'dataMax + 0.5']}
                 />
                 <Tooltip content={<CustomTooltip />} />
-                <Line 
-                  type="monotone" 
-                  dataKey="high" 
-                  stroke="#60A5FA" 
+                <Line
+                  type="monotone"
+                  dataKey="high"
+                  stroke="#60A5FA"
                   strokeWidth={2}
                   dot={false}
                   name="High"
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="close" 
-                  stroke="#34D399" 
+                <Line
+                  type="monotone"
+                  dataKey="close"
+                  stroke="#34D399"
                   strokeWidth={2}
                   dot={false}
                   name="Close"
                 />
-                <Line 
-                  type="monotone" 
-                  dataKey="low" 
-                  stroke="#EF4444" 
+                <Line
+                  type="monotone"
+                  dataKey="low"
+                  stroke="#EF4444"
                   strokeWidth={2}
                   dot={false}
                   name="Low"
@@ -332,7 +468,9 @@ export default function StockTracker() {
         {candleData.length > 0 && (
           <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
             <div className="px-6 py-4 bg-gray-900 border-b border-gray-700">
-              <h3 className="text-xl font-semibold text-gray-300">Recent Candle Data</h3>
+              <h3 className="text-xl font-semibold text-gray-300">
+                Recent Candle Data
+              </h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full">
